@@ -1,0 +1,57 @@
+body {
+    font-family: sans-serif;
+    margin: 1rem;
+}
+
+h1 {
+    font-size: 1.2rem;
+}
+
+h2 {
+    font-size: 1rem;
+    margin-bottom: .2rem;
+}
+
+table {
+    border-collapse: collapse;
+    margin-bottom: 1rem;
+}
+
+th, td {
+    text-align: left;
+    padding: .1rem 1rem .1rem 0;
+    vertical-align: top;
+    font-weight: normal;
+}
+
+th {
+    font-style: italic;
+}
+
+td.detail {
+    padding-bottom: .5rem;
+}
+
+.mono, td.detail {
+    font-family: monospace;
+}
+
+.js tr.detail {
+    display: none;
+}
+
+.js tr.detail.open {
+    display: table-row;
+}
+
+.hint {
+    display: none;
+}
+
+.js .hint {
+    display: inline;
+}
+
+form {
+    display: inline;
+}
