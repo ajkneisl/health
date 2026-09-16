@@ -1,13 +1,15 @@
-package dev.ajkneisl
+package dev.ajkneisl.health
 
 import io.ktor.server.application.Application
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.netty.Netty
 
-fun main(args: Array<String>) {
+fun main() {
     embeddedServer(
-        factory = io.ktor.server.netty.Netty,
-        port = System.getenv("PORT")?.toIntOrNull() ?: 8080,
-        host = "0.0.0.0",
-        module = Application::rootModule
-    ).start(wait = true)
+            factory = Netty,
+            port = System.getenv("PORT")?.toIntOrNull() ?: 8080,
+            host = "0.0.0.0",
+            module = Application::rootModule,
+        )
+        .start(wait = true)
 }

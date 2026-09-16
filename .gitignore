@@ -1,0 +1,21 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Kotlin
+.kotlin/
+
+out/
+.idea/workspace.xml
+.idea/usage.statistics.xml
+.idea/shelf/
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+
+# Local configuration
+health.json
