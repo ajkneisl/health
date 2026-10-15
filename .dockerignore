@@ -1,0 +1,11 @@
+.git
+.gradle
+.idea
+.kotlin
+build
+out
+*.iml
+*.log
+.DS_Store
+health.json
+.env

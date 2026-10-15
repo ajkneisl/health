@@ -1,0 +1,17 @@
+services:
+  health:
+    build: .
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - /opt/docker/health/health.json:/config/health.json:ro
+
+  cloudflared:
+    image: cloudflare/cloudflared:2025.9.1
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN in .env}
+    depends_on:
+      - health
