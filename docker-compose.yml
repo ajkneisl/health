@@ -4,6 +4,9 @@ services:
     restart: unless-stopped
     environment:
       TZ: ${TZ:-UTC}
+      # SES credentials for alert mail, read from .env by the AWS default provider chain.
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
     volumes:
       - /opt/docker/health/health.json:/config/health.json:ro
 
