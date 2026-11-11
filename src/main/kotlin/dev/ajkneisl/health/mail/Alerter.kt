@@ -22,12 +22,16 @@ import org.slf4j.LoggerFactory
 /**
  * Turns status transitions into email.
  *
- * Mails once an endpoint has been [Status.DOWN] or [Status.DEGRADED] for
- * [EmailConfig.alertAfterChecks] checks in a row (and again if it moves between the two after
- * that), on recovery from an outage that was mailed about when [EmailConfig.notifyOnRecovery] is
- * set, and once a day with a report covering every endpoint.
+ * Mails once an endpoint has been [Status.DOWN] for [EmailConfig.alertAfterChecks] failing checks
+ * in a row, on recovery from an outage that was mailed about when [EmailConfig.notifyOnRecovery]
+ * is set, and once a day with a report covering every endpoint.
  * Repeat alerts for the same endpoint and status inside [EmailConfig.cooldownMinutes] are dropped,
  * so a flapping endpoint cannot flood the recipients.
+ *
+ * [Status.DEGRADED] is quieter: a single email covers every degraded endpoint, and it is only sent
+ * while more than [EmailConfig.degradedAlertAbove] of them have been degraded for
+ * [EmailConfig.alertAfterChecks] checks in a row. It is sent once for as long as that stays true,
+ * and when endpoints flap in and out, at most once per [EmailConfig.degradedCooldownMinutes].
  */
 class Alerter(
     private val config: EmailConfig,
@@ -44,8 +48,15 @@ class Alerter(
     /** The status each endpoint was in before its current run of failures began. */
     private val beforeOutage = ConcurrentHashMap<String, Status>()
 
-    /** The status last mailed about for each endpoint's current outage. */
-    private val alerted = ConcurrentHashMap<String, Status>()
+    /** The endpoints whose current outage has been mailed about as down. */
+    private val alerted = ConcurrentHashMap.newKeySet<String>()
+
+    /** Endpoints that have been degraded for long enough to count. Guarded by its own lock. */
+    private val degraded = LinkedHashMap<String, EndpointSnapshot>()
+
+    /** Whether the current run of too many degraded endpoints has been mailed about. */
+    private var degradedAlerted = false
+    private var lastDegradedAlert: Long? = null
 
     private var dailyReportJob: Job? = null
 
@@ -56,21 +67,51 @@ class Alerter(
         }
 
         beforeOutage.remove(endpoint.id)
-        val wasAlerted = alerted.remove(endpoint.id) != null
+        val wasAlerted = alerted.remove(endpoint.id)
         if (endpoint.status == Status.UP && config.notifyOnRecovery && wasAlerted) {
             alert(endpoint, previous)
         }
     }
 
     override suspend fun onCheck(endpoint: EndpointSnapshot) {
-        if (!endpoint.status.failing) return
-        if (endpoint.consecutiveFailures < config.alertAfterChecks.coerceAtLeast(1)) return
+        val sustained =
+            endpoint.status.failing &&
+                endpoint.consecutiveFailures >= config.alertAfterChecks.coerceAtLeast(1)
 
-        val previous = alerted.put(endpoint.id, endpoint.status)
-        if (previous == endpoint.status) return
+        degradedAlert(endpoint, sustained)?.let { send(Emails.degraded(it, config, zone)) }
 
-        alert(endpoint, previous ?: beforeOutage[endpoint.id] ?: Status.UP)
+        if (!sustained || endpoint.status != Status.DOWN) return
+        if (!alerted.add(endpoint.id)) return
+
+        alert(endpoint, beforeOutage[endpoint.id] ?: Status.UP)
     }
+
+    /**
+     * Records whether [endpoint] counts as degraded.
+     *
+     * @return the degraded endpoints to mail about, or null when there is nothing to send.
+     */
+    private fun degradedAlert(endpoint: EndpointSnapshot, sustained: Boolean) =
+        synchronized(degraded) {
+            if (sustained && endpoint.status == Status.DEGRADED) degraded[endpoint.id] = endpoint
+            else degraded.remove(endpoint.id)
+
+            if (degraded.size <= config.degradedAlertAbove) {
+                degradedAlerted = false
+                return@synchronized null
+            }
+            if (degradedAlerted) return@synchronized null
+
+            // Inside the cooldown the alert is held back, not dropped: it goes out on a later
+            // check if there are still too many degraded endpoints once the cooldown has passed.
+            val cooldown = Duration.ofMinutes(config.degradedCooldownMinutes).toMillis()
+            val last = lastDegradedAlert
+            if (last != null && now() - last < cooldown) return@synchronized null
+
+            degradedAlerted = true
+            lastDegradedAlert = now()
+            degraded.values.toList()
+        }
 
     private suspend fun alert(endpoint: EndpointSnapshot, previous: Status) {
         val key = "${endpoint.id}:${endpoint.status}"

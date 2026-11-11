@@ -54,21 +54,113 @@ class AlerterTest {
         assertContains(message.html, "Public API is down")
     }
 
+    private fun degraded(id: String, failures: Int = 5) =
+        snapshot(Status.DEGRADED, id = id, name = "Service $id", failures = failures)
+
     @Test
-    fun `degradation sends an email and carries the stats`() = runBlocking {
+    fun `one or two degraded endpoints are not mailed about`() = runBlocking {
         val mailer = FakeMailer()
-        val degraded = snapshot(
-            Status.DEGRADED,
-            error = "Slower than 250ms",
-            stats = listOf(Stat("Queue depth", "812"), Stat("Workers", "8")),
+        val alerter = alerter(mailer = mailer)
+
+        alerter.check(degraded("a"), Status.UP)
+        alerter.check(degraded("b"), Status.UP)
+        alerter.check(degraded("a", failures = 6))
+
+        assertTrue(mailer.sent.isEmpty())
+    }
+
+    @Test
+    fun `more than two degraded endpoints send one email covering all of them`() = runBlocking {
+        val mailer = FakeMailer()
+        val alerter = alerter(mailer = mailer)
+
+        alerter.check(degraded("a"), Status.UP)
+        alerter.check(degraded("b"), Status.UP)
+        alerter.check(
+            snapshot(
+                Status.DEGRADED,
+                id = "c",
+                name = "Service c",
+                error = "Slower than 250ms",
+                stats = listOf(Stat("Queue depth", "812"), Stat("Workers", "8")),
+            ),
+            Status.UP,
         )
 
-        alerter(mailer = mailer).check(degraded, Status.UP)
-
         val message = mailer.sent.single()
-        assertEquals("[health] Public API is degraded", message.subject)
-        assertContains(message.text, "Queue depth: 812")
-        assertContains(message.html, "Queue depth: 812")
+        assertEquals("[health] 3 services are degraded", message.subject)
+        listOf("Service a", "Service b", "Service c", "Slower than 250ms", "Queue depth: 812")
+            .forEach {
+                assertContains(message.text, it)
+                assertContains(message.html, it)
+            }
+    }
+
+    @Test
+    fun `degradation that continues is only mailed about once`() = runBlocking {
+        val mailer = FakeMailer()
+        val alerter = alerter(mailer = mailer)
+
+        listOf("a", "b", "c").forEach { alerter.check(degraded(it), Status.UP) }
+        clock += 60 * 60_000
+        (6..20).forEach { failures ->
+            listOf("a", "b", "c").forEach { alerter.check(degraded(it, failures)) }
+        }
+        alerter.check(degraded("d"), Status.UP)
+
+        assertEquals(1, mailer.sent.size)
+    }
+
+    @Test
+    fun `endpoints only count once they have been degraded for enough checks`() = runBlocking {
+        val mailer = FakeMailer()
+        val alerter = alerter(mailer = mailer)
+
+        alerter.check(degraded("a"), Status.UP)
+        alerter.check(degraded("b"), Status.UP)
+        alerter.check(degraded("c", failures = 4), Status.UP)
+        assertTrue(mailer.sent.isEmpty())
+
+        alerter.check(degraded("c", failures = 5))
+        assertEquals(1, mailer.sent.size)
+    }
+
+    @Test
+    fun `degradation going on and off mails at most every ten minutes`() = runBlocking {
+        val mailer = FakeMailer()
+        val alerter = alerter(mailer = mailer)
+        suspend fun on(failures: Int = 5) = alerter.check(degraded("c", failures), Status.UP)
+        suspend fun off() = alerter.check(snapshot(Status.UP, id = "c"), Status.DEGRADED)
+
+        alerter.check(degraded("a"), Status.UP)
+        alerter.check(degraded("b"), Status.UP)
+        on()
+        assertEquals(1, mailer.sent.size)
+
+        repeat(4) {
+            clock += 2 * 60_000
+            off()
+            on()
+        }
+        assertEquals(1, mailer.sent.size) // eight minutes in
+
+        // Still degraded once the ten minutes are up: the held-back alert goes out.
+        clock += 2 * 60_000
+        alerter.check(degraded("c", failures = 6))
+        assertEquals(2, mailer.sent.size)
+    }
+
+    @Test
+    fun `a down endpoint that becomes degraded is not mailed about again`() = runBlocking {
+        val mailer = FakeMailer()
+        val alerter = alerter(config.copy(notifyOnRecovery = true), mailer)
+
+        alerter.check(snapshot(Status.DOWN), Status.UP)
+        alerter.check(snapshot(Status.DEGRADED, failures = 6), Status.DOWN)
+        assertEquals(listOf("[health] Public API is down"), mailer.sent.map { it.subject })
+
+        alerter.check(snapshot(Status.UP), Status.DEGRADED)
+        assertEquals("[health] Public API recovered", mailer.sent.last().subject)
     }
 
     @Test
@@ -138,10 +230,9 @@ class AlerterTest {
 
         alerter.check(snapshot(Status.DOWN), Status.UP)
         alerter.check(snapshot(Status.DOWN, id = "worker", name = "Worker"), Status.UP)
-        alerter.check(snapshot(Status.DEGRADED), Status.DOWN)
 
         assertEquals(
-            listOf("[health] Public API is down", "[health] Worker is down", "[health] Public API is degraded"),
+            listOf("[health] Public API is down", "[health] Worker is down"),
             mailer.sent.map { it.subject },
         )
     }

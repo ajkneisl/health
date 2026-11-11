@@ -33,7 +33,7 @@ object Emails {
         "border-collapse: collapse; font-family: sans-serif; font-size: 14px;"
     private const val CELL_STYLE = "text-align: left; padding: 2px 12px 2px 0; vertical-align: top;"
 
-    /** Fired on a transition into down or degraded, and on recovery when that is enabled. */
+    /** Fired once an endpoint has stayed down, and on recovery when that is enabled. */
     fun alert(
         endpoint: EndpointSnapshot,
         previous: Status,
@@ -82,6 +82,90 @@ object Emails {
                 appendLine()
                 appendLine("Stats")
                 stats.forEach { stat -> appendLine("  ${stat.label}: ${stat.value}") }
+            }
+        }
+
+        return EmailMessage(
+            subject = "${config.subjectPrefix} $headline".trim(),
+            html = html,
+            text = text,
+        )
+    }
+
+    /** Fired when too many endpoints are degraded at once; one message covers all of them. */
+    fun degraded(
+        endpoints: List<EndpointSnapshot>,
+        config: EmailConfig,
+        zone: ZoneId,
+    ): EmailMessage {
+        val headline = "${endpoints.size} services are degraded"
+
+        val html =
+            createHTML().div {
+                h2 { +headline }
+                table {
+                    style = TABLE_STYLE
+                    tr {
+                        listOf("Endpoint", "HTTP", "Latency", "Degraded since", "Last check")
+                            .forEach { heading ->
+                                th {
+                                    style = CELL_STYLE
+                                    +heading
+                                }
+                            }
+                    }
+                    endpoints.forEach { endpoint ->
+                        val latest = endpoint.latest
+                        tr {
+                            td {
+                                style = CELL_STYLE
+                                a(href = endpoint.url) { +endpoint.name }
+                            }
+                            td {
+                                style = CELL_STYLE
+                                +(latest?.httpStatus?.toString() ?: "—")
+                            }
+                            td {
+                                style = CELL_STYLE
+                                +(latest?.let { "${it.latencyMillis} ms" } ?: "—")
+                            }
+                            td {
+                                style = CELL_STYLE
+                                +timestamp(endpoint.statusSince, zone)
+                            }
+                            td {
+                                style = CELL_STYLE
+                                +timestamp(latest?.checkedAt, zone)
+                            }
+                        }
+                        val details = detailLines(endpoint)
+                        if (details.isNotEmpty()) {
+                            tr {
+                                td {
+                                    style = "$CELL_STYLE color: #555; padding-bottom: 8px;"
+                                    attributes["colspan"] = "5"
+                                    details.forEachIndexed { index, line ->
+                                        if (index > 0) br()
+                                        +line
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+        val text = buildString {
+            appendLine(headline)
+            endpoints.forEach { endpoint ->
+                val latest = endpoint.latest
+                appendLine()
+                appendLine(
+                    "${endpoint.name}: ${endpoint.method} ${endpoint.url}" +
+                        (latest?.let { " · ${it.latencyMillis} ms" } ?: "") +
+                        " · since ${timestamp(endpoint.statusSince, zone)}"
+                )
+                detailLines(endpoint).forEach { line -> appendLine("  $line") }
             }
         }
 
