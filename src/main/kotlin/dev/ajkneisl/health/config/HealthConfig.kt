@@ -15,4 +15,10 @@ data class HealthConfig(
     val defaults: EndpointDefaults = EndpointDefaults(),
     val endpoints: List<EndpointConfig> = emptyList(),
     val email: EmailConfig = EmailConfig(),
+    /**
+     * Checked on the default interval but not shown on the dashboard. Alerts are only mailed while
+     * its last check was a 200, so losing our own connection does not mail about every endpoint.
+     * Blank disables the baseline.
+     */
+    val baselineUrl: String = "https://www.google.com",
 )

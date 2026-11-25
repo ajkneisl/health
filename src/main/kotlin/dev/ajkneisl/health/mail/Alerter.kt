@@ -60,6 +60,13 @@ class Alerter(
 
     private var dailyReportJob: Job? = null
 
+    /**
+     * Whether the baseline check is up. Down and degraded alerts are held back while it is not, and
+     * go out on a later check if the endpoints are still failing once it is back.
+     */
+    @Volatile
+    var baselineUp: () -> Boolean = { true }
+
     override suspend fun onStatusChange(endpoint: EndpointSnapshot, previous: Status) {
         if (endpoint.status.failing) {
             if (!previous.failing) beforeOutage[endpoint.id] = previous
@@ -81,6 +88,11 @@ class Alerter(
         degradedAlert(endpoint, sustained)?.let { send(Emails.degraded(it, config, zone)) }
 
         if (!sustained || endpoint.status != Status.DOWN) return
+        if (endpoint.id in alerted) return
+        if (!baselineUp()) {
+            log.info("Holding back down alert for {} — the baseline is not up", endpoint.name)
+            return
+        }
         if (!alerted.add(endpoint.id)) return
 
         alert(endpoint, beforeOutage[endpoint.id] ?: Status.UP)
@@ -107,6 +119,7 @@ class Alerter(
             val cooldown = Duration.ofMinutes(config.degradedCooldownMinutes).toMillis()
             val last = lastDegradedAlert
             if (last != null && now() - last < cooldown) return@synchronized null
+            if (!baselineUp()) return@synchronized null
 
             degradedAlerted = true
             lastDegradedAlert = now()

@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 data class EndpointDefaults(
     val type: CheckType = CheckType.FULL,
     /** Seconds between checks of the same endpoint. */
-    val intervalSeconds: Long = 30,
+    val intervalSeconds: Long = 60,
     /** Hard cap on a single check, including reading the body. */
     val timeoutMillis: Long = 5_000,
     /** Number of past checks kept per endpoint for the sparkline and window uptime. */

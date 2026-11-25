@@ -27,6 +27,8 @@ fun Application.healthModule(
     alerter: Alerter = Alerter(config.email, Mailer.create(config.email)),
     healthMonitor: HealthMonitor = HealthMonitor(config, listener = alerter),
 ) {
+    alerter.baselineUp = healthMonitor::baselineUp
+
     install(WebSockets) {
         pingPeriod = 15.seconds
         timeout = 15.seconds

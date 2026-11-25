@@ -54,6 +54,38 @@ class AlerterTest {
         assertContains(message.html, "Public API is down")
     }
 
+    @Test
+    fun `down alerts wait for the baseline to be up`() = runBlocking {
+        val mailer = FakeMailer()
+        val alerter = alerter(mailer = mailer)
+        var baseline = false
+        alerter.baselineUp = { baseline }
+
+        alerter.check(snapshot(Status.DOWN, failures = 5), Status.UP)
+        alerter.check(snapshot(Status.DOWN, failures = 6))
+        assertTrue(mailer.sent.isEmpty())
+
+        baseline = true
+        alerter.check(snapshot(Status.DOWN, failures = 7))
+        alerter.check(snapshot(Status.DOWN, failures = 8))
+        assertEquals(1, mailer.sent.size)
+    }
+
+    @Test
+    fun `degraded alerts wait for the baseline to be up`() = runBlocking {
+        val mailer = FakeMailer()
+        val alerter = alerter(mailer = mailer)
+        var baseline = false
+        alerter.baselineUp = { baseline }
+
+        listOf("a", "b", "c").forEach { alerter.check(degraded(it), Status.UP) }
+        assertTrue(mailer.sent.isEmpty())
+
+        baseline = true
+        alerter.check(degraded("a", failures = 6))
+        assertEquals(1, mailer.sent.size)
+    }
+
     private fun degraded(id: String, failures: Int = 5) =
         snapshot(Status.DEGRADED, id = id, name = "Service $id", failures = failures)
 

@@ -43,6 +43,27 @@ class HealthMonitor(
     private val endpoints = config.resolveEndpoints()
     private val states = endpoints.associate { it.id to EndpointState(it) }
 
+    private val baseline: Endpoint? = config.baselineUrl.takeIf { it.isNotBlank() }?.let { url ->
+        Endpoint(
+            id = "baseline",
+            name = "Baseline",
+            url = url,
+            type = CheckType.SIMPLE,
+            method = "GET",
+            group = "Baseline",
+            headers = emptyMap(),
+            intervalSeconds = config.defaults.intervalSeconds.coerceAtLeast(1),
+            timeoutMillis = config.defaults.timeoutMillis.coerceAtLeast(100),
+            historySize = 1,
+            degradedAfterMillis = config.defaults.degradedAfterMillis,
+            expectedStatuses = listOf(200),
+            statsPath = "",
+        )
+    }
+
+    @Volatile
+    private var baselineStatus = Status.UNKNOWN
+
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     private val _version = MutableStateFlow(0L)
@@ -50,7 +71,18 @@ class HealthMonitor(
     /** Bumped whenever an endpoint changes status, so connected dashboards can refresh. */
     val version: StateFlow<Long> = _version
 
+    /** True when there is no baseline, or its last check succeeded. False until it is first checked. */
+    fun baselineUp(): Boolean = baseline == null || baselineStatus == Status.UP
+
     fun start() {
+        baseline?.let { endpoint ->
+            scope.launch {
+                while (isActive) {
+                    runBaselineCheck(endpoint)
+                    delay((endpoint.intervalSeconds * 1000).milliseconds)
+                }
+            }
+        }
         endpoints.forEachIndexed { index, endpoint ->
             scope.launch {
                 // Stagger the initial checks so a large config does not fire everything at once.
@@ -71,7 +103,21 @@ class HealthMonitor(
 
     /** Checks every endpoint right now, outside of its normal schedule. */
     suspend fun checkAll() {
+        baseline?.let { runBaselineCheck(it) }
         endpoints.map { scope.async { runCheck(it) } }.awaitAll()
+    }
+
+    private suspend fun runBaselineCheck(endpoint: Endpoint) {
+        val result = check(endpoint)
+        if (result.status != baselineStatus) {
+            log.info(
+                "Baseline {} is {} ({})",
+                endpoint.url,
+                result.status,
+                result.error ?: "${result.latencyMillis}ms",
+            )
+        }
+        baselineStatus = result.status
     }
 
     fun snapshot(): DashboardSnapshot = DashboardSnapshot(
